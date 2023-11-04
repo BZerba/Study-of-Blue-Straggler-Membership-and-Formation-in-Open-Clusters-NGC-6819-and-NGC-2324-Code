@@ -1,0 +1,315 @@
+import matplotlib.pyplot as plt
+import numpy as np
+from pylab import *
+
+import astropy.units as u
+from astropy.coordinates import SkyCoord
+from astroquery.gaia import Gaia
+from astroquery.simbad import Simbad
+from sklearn.ensemble import RandomForestClassifier
+
+rc('xtick', labelsize="14")
+rc('ytick', labelsize="14")
+rc('font', size="14")
+
+a,feh=np.loadtxt('pops.solar11',usecols=(0,1),unpack=True)
+
+def fetchiso(iiso):
+    if iiso > 65:
+        print('Error! iiso must be 65 or less')
+    # seek the "iiso"th isochrone and return the data
+
+    # The hess diagram files are composed of blocks, one block per SSP.
+    with open('hess_gaia_ev6res0mixss.out','r') as filehandle:
+        filecontents = filehandle.readlines()
+
+    teff=[];logl=[];gmag=[];bmag=[];rmag=[];nst=[];indx=[]
+    nHA = 0
+    popcount = -1
+    for line in filecontents:
+        row = line.split()
+        if row[0] == '#(':     # end old block, make a plot start new one
+            popcount = popcount + 1
+            ireadthis = 0
+            if popcount == iiso:     # store this one. Otherwise, spin on.
+                ireadthis = 1
+        elif row[0] == '#':
+            # do nothing
+            fiddle = 0
+        elif ireadthis == 1:
+            nHA = nHA + 1
+            # collect data
+            teff.append(float(row[3]))
+            logl.append(float(row[2]))
+            nst.append(float(row[4]))
+            gmag.append(float(row[5]))
+            bmag.append(float(row[6]))
+            rmag.append(float(row[7]))
+            indx.append(int(row[0]))
+            #print(popcount,nHA,row[0],row[1],row[2])
+        else:
+            # do nothing
+            fiddle = 0
+    # Teff, log L/Lo, number of stars in bin
+    teff = np.array(teff)
+    logl = np.array(logl)
+    nst  = np.array(nst)
+    # Gaia BP, Gaia RP, integer array of bin number
+    bmag = np.array(bmag)
+    rmag = np.array(rmag)
+    indx = np.array(indx)
+    # nHA is just an integer - the number of point in the isochrone
+    return teff,logl,nst,gmag,bmag,rmag,indx,nHA
+
+# read cone search results from a file
+inputfilename = 'n2324_cone.csv'
+import csv
+ID=[];ra=[];dec=[];plx=[];eplx=[];pmra=[];epmra=[];pmdec=[];epmdec=[];g=[];bp=[];rp=[];bprp=[];rv=[];teff=[];ag=[];ebprp=[];vflag=[]
+with open(inputfilename,'r',newline='') as csvfile:
+     cr = csv.reader(csvfile)
+     ict = 0
+     for row in cr:
+          if ict == 0:
+               columnnames = row
+               ict = ict + 1
+          else:
+               ict = ict + 1
+               ID.append(row[0])
+               try:
+                    ra.append(float(row[1]))  # The downside of csv format is
+               except:                        # having to cast the floats
+                    ra.append(-999.)          # instead of simply reading them
+               try:                           # in as floats to start with.
+                    dec.append(float(row[2]))
+               except:
+                    dec.append(-999.)
+               try:
+                    plx.append(float(row[3]))
+               except:
+                    plx.append(-999.)
+               try:
+                    eplx.append(float(row[4]))
+               except:
+                    eplx.append(-999.)
+               try:
+                    pmra.append(float(row[5]))
+               except:
+                    pmra.append(-999.)
+               try:
+                    epmra.append(float(row[6]))
+               except:
+                    epmra.append(-999.)
+               try:
+                    pmdec.append(float(row[7]))
+               except:
+                    pmdec.append(-999.)
+               try:
+                    epmdec.append(float(row[8]))
+               except:
+                    epmdec.append(-999.)
+               try:
+                    g.append(float(row[9]))
+               except:
+                    g.append(-999.)
+               try:
+                    bprp.append(float(row[12]))
+               except:
+                    bprp.append(-999.)
+
+
+ra = np.array(ra); dec=np.array(dec); pmra=np.array(pmra); pmdec=np.array(pmdec)
+g = np.array(g); bprp=np.array(bprp); plx=np.array(plx)
+jtrain = np.zeros(len(ID),dtype=int) # 0 for not in training list, 1 for in the list
+ptrain = np.zeros(len(ID),dtype=float) # store probabilities here
+colors = ['']*len(ID)
+
+
+# 1. plot proper motions to draw a generous circle for member/nonmember
+plot(pmra,pmdec,'b+')
+xlabel(r'$\mu_\alpha$ (mas yr$^{-1}$)', fontsize="14")
+ylabel(r'$\mu_\delta$ (mas ys$^{-1}$)', fontsize="14")
+title('Proper motions')
+
+show()
+
+# parameters: center = -0.309 -0.094  , goodradius = 0.10, definitelybadradius = 0.20
+
+for i in range(len(ra)):
+     d = math.sqrt( (pmra[i] + 0.309)**2 + (pmdec[i] + 0.094)**2 )
+     if d < 0.13:
+          jtrain[i] = 1          # "1" simply means "in our training set"
+          ptrain[i] = 1.0        # probability (crudely assigned)
+          colors[i] = 'xkcd:black'
+     elif d > 0.27:
+          jtrain[i] = 1
+          ptrain[i] = 0.0
+          colors[i] = 'xkcd:booger'
+     else:
+          colors[i] = 'xkcd:light gray'
+
+# hone our selection with a cut on parallax distance
+for i in range(len(ra)):
+     d = 1000.0/plx[i]
+     if (d < 4200.0) or (d > 6200.0):   # also manually selected
+          colors[i] = 'xkcd:booger'
+          jtrain[i] = 1
+          ptrain[i] = 0.0
+
+
+# plot training data
+fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 6))
+ax1.scatter(ra, dec, c=colors, s=2)
+ax1.set_title("RA - dec", fontsize="14")
+ax1.set_ylabel(r'Dec (deg)', fontsize="14")
+ax1.set_xlabel(r'R.A. (deg)', fontsize="14")
+
+ax2.scatter(pmra, pmdec, c=colors, s=2)
+ax2.set_title("pmRA - pmDEC", fontsize="14")
+ax2.set_ylabel(r'pmdec (mas yr$^{-1}$)', fontsize="14")
+ax2.set_xlabel(r'pmRA (mas yr$^{-1}$)', fontsize="14")
+
+
+show()
+
+print(len(plx),' should equal',len(jtrain))
+
+fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 6))
+comp1=1000.0/plx[(ptrain < 0.5)]
+comp2=1000.0/plx[(ptrain > 0.5)]
+ax1.hist([comp1,comp2],bins=100,range=(0.0,10000.0),stacked=True,color=['xkcd:light gray','xkcd:crimson'])
+ax1.set_title("Parallax dist (pc)", fontsize="14")
+ax1.set_xlabel('Distance (pc)', fontsize="14")
+ax1.set_ylabel('N', fontsize="14")
+
+ax2.scatter(bprp,g,c=colors, s=2)
+ax2.set_xlim([-1,4])
+ax2.set_ylim([22.0,8.0])
+ax2.set_xlabel('BP-RP', fontsize="14")
+ax2.set_ylabel('G (mag)', fontsize="14")
+
+show()
+
+foo = jtrain[ptrain > 0.5]
+print('Before random forest, we have ',len(foo),'members')
+
+
+# Random Forest
+
+# prepare the data: stack the arrays
+data = np.stack((ra,dec,pmra,pmdec,plx),axis=-1)
+
+# recipe: https://stackabuse.com/random-forest-algorithm-with-python-and-scikit-learn/
+# Random Forest setup:
+SEED = 188231   # a random number
+#rfc = RandomForestClassifier(n_estimators=5,max_depth=2,random_state=SEED)
+rfc = RandomForestClassifier(n_estimators=177,max_depth=5,random_state=SEED)
+
+# Train the RF 
+data2 = np.stack((ra[jtrain==1],dec[jtrain==1],pmra[jtrain==1],pmdec[jtrain==1],plx[jtrain==1]),axis=-1)
+ytrain = ptrain[jtrain==1]
+ytrain2 = np.zeros(len(ytrain),dtype=int)
+for i in range(len(ytrain)):
+     if ytrain[i] < 0.2:
+          ytrain2[i] = 0
+     else:
+          ytrain2[i] = 1
+
+rfc.fit(data2,ytrain2)
+
+# Predict using this training set
+rfmem = rfc.predict(data)
+
+rfmem2 = [] ; memcount=0; noncount=0
+for i in range(len(rfmem)):
+     if rfmem[i] < 0.2:
+          rfmem2.append('xkcd:light gray')
+          noncount = noncount + 1
+     else:
+          rfmem2.append('xkcd:red')
+          memcount = memcount + 1
+
+print('After random forest, we have ',memcount,'members')
+
+fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 6))
+ax1.scatter(ra,dec, c=rfmem2, s=2)
+ax1.set_title("RA - dec", fontsize="14")
+ax1.set_ylabel(r'Dec (deg)', fontsize="14")
+ax1.set_xlabel(r'R.A. (deg)', fontsize="14")
+
+ax2.scatter(pmra, pmdec, c=rfmem2, s=2)
+ax2.set_title("pmRA - pmDEC", fontsize="14")
+ax2.set_ylabel(r'pmdec (mas yr$^{-1}$)', fontsize="14")
+ax2.set_xlabel(r'pmRA (mas yr$^{-1}$)', fontsize="14")
+
+show()
+
+
+fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 6))
+comp1=1000.0/plx[rfmem <0.2]
+comp2=1000.0/plx[rfmem >= 0.2]
+ax1.hist([comp1,comp2],bins=100,range=(0.0,10000.0),stacked=True,color=['xkcd:light gray','xkcd:red'])
+ax1.set_title("Parallax dist (pc)", fontsize="14")
+ax1.set_xlabel('Distance (pc)', fontsize="14")
+ax1.set_ylabel('N', fontsize="14")
+
+ax2.scatter(bprp,g,c=rfmem2, s=2)
+ax2.set_xlim([-1,4])
+ax2.set_ylim([22.0,8.0])
+ax2.set_xlabel('BP-RP', fontsize="14")
+ax2.set_ylabel('G (mag)', fontsize="14")
+
+show()
+
+rfmem = rfc.predict(data)
+
+rfmem2 = [] ; memcount=0; noncount=0
+for i in range(len(rfmem)):
+     if rfmem[i] < 0.2:
+          rfmem2.append('none')
+          noncount = noncount + 1
+     else:
+          rfmem2.append('xkcd:red')
+          memcount = memcount + 1
+          
+fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 6))
+ax1.scatter(ra,dec, c=rfmem2, s=2)
+ax1.set_title("RA - dec", fontsize="14")
+ax1.set_ylabel(r'Dec (deg)', fontsize="14")
+ax1.set_xlabel(r'R.A. (deg)', fontsize="14")
+
+ax2.scatter(pmra, pmdec, c=rfmem2, s=2)
+ax2.set_title("pmRA - pmDEC", fontsize="14")
+ax2.set_ylabel(r'pmdec (mas yr$^{-1}$)', fontsize="14")
+ax2.set_xlabel(r'pmRA (mas yr$^{-1}$)', fontsize="14")
+
+show()
+
+
+ax2.scatter(bprp - 2.035*0.115,g - (2.740)*0.115 - 18.594 + 5,c=rfmem2, s=2)
+ax2.set_xlim([-1,4])
+ax2.set_ylim([22.0,8.0])
+ax2.set_xlabel('BP-RP', fontsize="14")
+ax2.set_ylabel('G (mag)', fontsize="14")
+
+iiso = 34   # get the 33rd isochrone in the file
+teff,logl,nst,gmag,bmag,rmag,indx,nHA=fetchiso(iiso)
+br = bmag - rmag
+#gmag = gmag + (2.740/1.339)*br
+plot(br,gmag,label='Age '+str(a[iiso])+' Gyr')
+
+# iiso = 35   # get the 33rd isochrone in the file
+# teff,logl,nst,gmag,bmag,rmag,indx,nHA=fetchiso(iiso)
+# br = bmag - rmag
+# #gmag = gmag + (2.740/1.339)*br
+# plot(br,gmag,label='Age '+str(a[iiso])+' Gyr')
+
+
+
+xlim([-1,5.0])
+ylim([22.0,-3.0])
+legend(frameon=False)
+xlabel(r'G$_{BP}$ - G$_{RP}$ (mag)', fontsize="14")
+ylabel(r'G (mag)', fontsize="14")
+show()
+
+print( 'normal stop' )
