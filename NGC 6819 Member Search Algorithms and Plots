@@ -222,6 +222,9 @@ rfc.fit(data2,ytrain2)
 # Predict using this training set
 rfmem = rfc.predict(data)
 
+memgmag = [0] * 1157
+j = 0
+
 rfmem2 = [] ; memcount=0; noncount=0
 for i in range(len(rfmem)):
      if rfmem[i] < 0.2:
@@ -230,8 +233,22 @@ for i in range(len(rfmem)):
      else:
           rfmem2.append('xkcd:red')
           memcount = memcount + 1
+          memgmag[j] = g[i]
+          j = j + 1
 
 print('After random forest, we have ',memcount,'members')
+#print(len(memgamg))
+
+#print(j)
+
+number_denst = 0
+
+for i in range(len(memgmag)):
+    if memgmag[i] - (2.740)*(0.114) - 17.242 + 5 <= 4.36 and memgmag[i] - (2.740)*(0.114) - 17.242 + 5 >= 1.74:
+        number_denst = number_denst + 1
+
+print('The number of main sequence members with an absolute magnitude within the interval [1.74, 4.36] is', number_denst)
+
 
 fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 6))
 ax1.scatter(ra,dec, c=rfmem2, s=2)
@@ -318,6 +335,7 @@ plot(br,gmag,label='Age '+str(a[iiso])+' Gyr')
 xlim([-1,5.0])
 ylim([22.0,-1.0])
 legend(frameon=False)
+title("Color Magnitude Diagram")
 xlabel(r'G$_{BP}$ - G$_{RP}$ (mag)')
 ylabel(r'G (mag)')
 show()
